@@ -81,6 +81,57 @@ if "generated_csv" not in st.session_state:
 if "show_result" not in st.session_state:
     st.session_state.show_result = False
 
+# CSV読み込み用の一時バッファ（ウィジェット生成前に反映するため）
+if "_pending_user_info" not in st.session_state:
+    st.session_state._pending_user_info = None
+if "_csv_load_message" not in st.session_state:
+    st.session_state._csv_load_message = None
+# 処理済みアップロードファイルの識別子を保持（無限rerun防止）
+if "_processed_upload_id" not in st.session_state:
+    st.session_state._processed_upload_id = None
+
+# ウィジェット生成前に、保留中のCSV読み込みデータを反映する
+if st.session_state._pending_user_info is not None:
+    pending = st.session_state._pending_user_info
+    for key, value in pending.items():
+        if key in DEFAULT_USER_INFO:
+            st.session_state[key] = value
+    st.session_state._pending_user_info = None
+
+
+def decode_csv_bytes(raw_bytes):
+    """Windows環境で保存されたCSV（UTF-8 BOM付き/Shift-JIS等）を堅牢にデコードする。"""
+    encodings = ["utf-8-sig", "utf-8", "cp932", "shift_jis", "utf-16"]
+    last_error = None
+    for enc in encodings:
+        try:
+            text = raw_bytes.decode(enc)
+            # BOMが残っている場合は除去
+            if text.startswith("\ufeff"):
+                text = text.lstrip("\ufeff")
+            return text
+        except (UnicodeDecodeError, UnicodeError) as e:
+            last_error = e
+            continue
+    raise ValueError(f"CSVの文字コードを判別できませんでした: {last_error}")
+
+
+def normalize_key(key):
+    """BOMや空白・改行を除去してキーを正規化する。"""
+    if key is None:
+        return ""
+    return key.replace("\ufeff", "").strip()
+
+
+def parse_bool(value):
+    """真偽値の文字列表現を堅牢にパースする。"""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in ("true", "1", "yes", "y", "on", "はい")
+
+
 # サイドバーでユーザ情報入力
 with st.sidebar:
     st.header("👨‍👩‍👧‍👦 家族情報入力")
@@ -181,25 +232,64 @@ st.sidebar.download_button(
 # ユーザ情報のCSVアップロード
 uploaded_file = st.sidebar.file_uploader("📤 ユーザ情報CSVをアップロード", type=["csv"])
 if uploaded_file is not None:
+    # アップロードファイルの一意な識別子を生成（name + size）
     try:
-        content = uploaded_file.getvalue().decode("utf-8")
-        reader = csv.DictReader(io.StringIO(content))
-        for row in reader:
-            for key in DEFAULT_USER_INFO.keys():
-                if key in row and row[key] is not None and row[key] != "":
-                    if key in ["cooking_skill_jp", "cooking_skill_west", "cooking_skill_cn", "budget_per_person", "family_size"]:
-                        try:
-                            st.session_state[key] = int(float(row[key]))
-                        except (ValueError, TypeError):
-                            pass
-                    elif key in ["use_seasonal", "nutrition_balance", "no_allergies"]:
-                        st.session_state[key] = str(row[key]).lower() == "true"
-                    else:
-                        st.session_state[key] = row[key]
-        st.sidebar.success("ユーザ情報を読み込みました。")
-        st.rerun()
-    except Exception as e:
-        st.sidebar.error(f"CSVの読み込みに失敗しました: {e}")
+        upload_id = f"{uploaded_file.name}::{uploaded_file.size}"
+    except Exception:
+        upload_id = uploaded_file.name
+
+    # 既に処理済みのファイルであればスキップ（無限rerun防止）
+    if st.session_state._processed_upload_id != upload_id:
+        try:
+            raw_bytes = uploaded_file.getvalue()
+            content = decode_csv_bytes(raw_bytes)
+            reader = csv.DictReader(io.StringIO(content))
+            loaded_data = {}
+            for row in reader:
+                # キーを正規化（BOM・空白除去）
+                normalized_row = {normalize_key(k): v for k, v in row.items() if k is not None}
+                for key in DEFAULT_USER_INFO.keys():
+                    if key in normalized_row:
+                        value = normalized_row[key]
+                        if value is None:
+                            continue
+                        value_str = str(value).strip()
+                        if value_str == "":
+                            continue
+                        if key in ["cooking_skill_jp", "cooking_skill_west", "cooking_skill_cn", "budget_per_person", "family_size"]:
+                            try:
+                                loaded_data[key] = int(float(value_str))
+                            except (ValueError, TypeError):
+                                pass
+                        elif key in ["use_seasonal", "nutrition_balance", "no_allergies"]:
+                            loaded_data[key] = parse_bool(value_str)
+                        else:
+                            loaded_data[key] = value_str
+            if loaded_data:
+                # ウィジェット生成後に直接session_stateを書き換えるとエラーになるため、
+                # 保留バッファに保存してrerunし、次回のウィジェット生成前に反映する
+                st.session_state._pending_user_info = loaded_data
+                st.session_state._csv_load_message = ("success", "ユーザ情報を読み込みました。")
+                # 処理済みとしてマークしてからrerun（無限ループ防止）
+                st.session_state._processed_upload_id = upload_id
+                st.rerun()
+            else:
+                st.session_state._csv_load_message = ("warning", "CSVに有効なデータが見つかりませんでした。列名をご確認ください。")
+                st.session_state._processed_upload_id = upload_id
+        except Exception as e:
+            st.session_state._csv_load_message = ("error", f"CSVの読み込みに失敗しました: {e}")
+            st.session_state._processed_upload_id = upload_id
+
+# 読み込み結果メッセージの表示
+if st.session_state._csv_load_message is not None:
+    level, msg = st.session_state._csv_load_message
+    if level == "success":
+        st.sidebar.success(msg)
+    elif level == "warning":
+        st.sidebar.warning(msg)
+    else:
+        st.sidebar.error(msg)
+    st.session_state._csv_load_message = None
 
 # メインエリア
 st.header("📋 入力内容の確認")
@@ -263,6 +353,16 @@ if st.button("🍳 1か月分の夕食メニューを生成", type="primary"):
             栄養バランスを考慮: {'はい' if info.get('nutrition_balance') else 'いいえ'}
             1食/人あたりの平均予算: {info.get('budget_per_person', 0)}円
 
+            【メニュー構成のバリエーション方針（重要）】
+            家族の好みを尊重しつつ、食の幅を広げるため、以下のルールを必ず守ってください。
+            1. 好みの食材・好きな料理は、1か月全体の主菜・副菜のうち6〜7割程度に留めてください。残りの3〜4割は、好みに挙げられていない食材（例：好みに「鶏肉・鮭」しかない場合は、豚肉・牛肉・白身魚・青魚・大豆製品・卵・きのこ類・海藻類・旬の野菜など）を意図的に取り入れてください。
+            2. 週ごとにテーマをローテーションしてください（例：1週目=和食中心、2週目=洋食中心、3週目=中華・アジアン中心、4週目=ミックス・時短料理中心）。ただし料理者の熟練度が低いジャンルは頻度を下げて構いません。
+            3. 同じ主菜・副菜の組み合わせを月内で重複させないでください。似た系統の料理（例：唐揚げと竜田揚げ）も連日にならないよう分散してください。
+            4. 子供が苦手そうな食材（ピーマン、セロリ、レバー、納豆など）も、月に1〜2回は調理法を工夫して（細かく刻む、甘辛く味付けする、揚げる等）登場させ、レシピに工夫点を明記してください。
+            5. 旬の野菜を利用する場合は、週に2回以上、指定季節の野菜を主菜または副菜に取り入れてください。
+            6. 栄養バランスを考慮する場合は、1週間の中で肉・魚・大豆製品・緑黄色野菜・海藻・きのこがバランスよく登場するようにしてください。
+            7. 予算内に収まるよう、高価な食材（牛肉・魚介類など）は週1〜2回程度に抑え、鶏肉・豚肉・大豆製品・旬の野菜でコスト調整してください。
+
             出力はCSV形式で、以下の列を含めてください：
             日付,主菜名,主菜レシピ,副菜名,副菜レシピ,推定費用(円/人),栄養バランスコメント
 
@@ -278,7 +378,7 @@ if st.button("🍳 1か月分の夕食メニューを生成", type="primary"):
                 response = client.chat.completions.create(
                     model="deepseek-chat",
                     messages=[
-                        {"role": "system", "content": "あなたはプロの栄養士兼料理研究家です。指示に従い、CSV形式で出力してください。"},
+                        {"role": "system", "content": "あなたはプロの栄養士兼料理研究家です。家族の好みを尊重しつつ、好みに偏らないバリエーション豊かな献立を提案し、指示に従いCSV形式で出力してください。"},
                         {"role": "user", "content": prompt}
                     ],
                     temperature=0.7,
