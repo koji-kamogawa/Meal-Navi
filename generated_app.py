@@ -222,11 +222,14 @@ writer.writeheader()
 writer.writerow(user_info)
 csv_str = csv_buffer.getvalue()
 
+# Windows11のExcelで文字化けしないようUTF-8 BOMを付与
+csv_str_with_bom = "\ufeff" + csv_str
+
 st.sidebar.download_button(
     label="📥 ユーザ情報をCSVでダウンロード",
-    data=csv_str,
+    data=csv_str_with_bom,
     file_name="user_info.csv",
-    mime="text/csv"
+    mime="text/csv; charset=utf-8"
 )
 
 # ユーザ情報のCSVアップロード
@@ -414,10 +417,11 @@ if st.session_state.show_result and st.session_state.generated_csv:
         st.warning(f"CSVの解析に失敗しました。生データを表示します。\n{e}")
         st.text(st.session_state.generated_csv)
 
-    # ダウンロードボタン
+    # ダウンロードボタン（Windows11のExcelで文字化けしないようUTF-8 BOMを付与）
+    menu_csv_with_bom = "\ufeff" + st.session_state.generated_csv
     st.download_button(
         label="📥 メニューCSVをダウンロード",
-        data=st.session_state.generated_csv,
+        data=menu_csv_with_bom,
         file_name="monthly_dinner_menu.csv",
-        mime="text/csv"
+        mime="text/csv; charset=utf-8"
     )
