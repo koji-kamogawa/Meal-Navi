@@ -65,6 +65,8 @@ DEFAULT_USER_INFO = {
     "allergies": "",
     "no_allergies": False,
     "favorite_dishes": "",
+    "dislike_ingredients": "",
+    "dislike_dishes": "",
     "use_seasonal": True,
     "season": "指定なし",
     "nutrition_balance": True,
@@ -191,7 +193,21 @@ with st.sidebar:
         height=80
     )
 
-    st.subheader("⑥ 旬・季節の野菜")
+    st.subheader("⑥ 家族が苦手な食材・料理")
+    st.text_area(
+        "苦手な食材（カンマ区切り）",
+        key="dislike_ingredients",
+        placeholder="例：ピーマン、セロリ、レバー、納豆",
+        height=80
+    )
+    st.text_area(
+        "苦手な料理（カンマ区切り）",
+        key="dislike_dishes",
+        placeholder="例：麻婆豆腐、酢豚、グラタン、ちらし寿司",
+        height=80
+    )
+
+    st.subheader("⑦ 旬・季節の野菜")
     st.checkbox("旬の野菜を利用する", key="use_seasonal")
     season_options = ["指定なし", "春", "夏", "秋", "冬"]
     if st.session_state.season not in season_options:
@@ -202,10 +218,10 @@ with st.sidebar:
         key="season"
     )
 
-    st.subheader("⑦ 栄養バランス")
+    st.subheader("⑧ 栄養バランス")
     st.checkbox("栄養バランスを考慮する", key="nutrition_balance")
 
-    st.subheader("⑧ 予算")
+    st.subheader("⑨ 予算")
     st.number_input(
         "1食/人あたりの平均予算（円）",
         min_value=300,
@@ -320,6 +336,8 @@ with col2:
     else:
         st.markdown(f"- **アレルギー**: {info.get('allergies') or '未入力'}")
     st.markdown(f"- **好きな料理**: {info.get('favorite_dishes') or '未入力'}")
+    st.markdown(f"- **苦手な食材**: {info.get('dislike_ingredients') or '未入力'}")
+    st.markdown(f"- **苦手な料理**: {info.get('dislike_dishes') or '未入力'}")
     st.markdown("#### 🌿 その他条件")
     st.markdown(f"- **旬の野菜を利用**: {'はい' if info.get('use_seasonal') else 'いいえ'}")
     st.markdown(f"- **季節指定**: {info.get('season', '指定なし')}")
@@ -341,6 +359,8 @@ if st.button("🍳 1か月分の夕食メニューを生成", type="primary"):
             info = {k: st.session_state[k] for k in DEFAULT_USER_INFO.keys()}
             allergy_text = "なし" if info.get('no_allergies') else (info.get('allergies') or "なし")
             season_text = info.get('season') if info.get('season') != "指定なし" else "指定なし（現在の季節に合わせて）"
+            dislike_ingredients_text = info.get('dislike_ingredients') or "なし"
+            dislike_dishes_text = info.get('dislike_dishes') or "なし"
             prompt = f"""
             あなたはプロの栄養士兼料理研究家です。以下の家族情報に基づいて、1か月分（30日間）の夕食メニュー（主菜と副菜）と簡単なレシピを提案してください。
 
@@ -351,6 +371,8 @@ if st.button("🍳 1か月分の夕食メニューを生成", type="primary"):
             好みの食材: {info.get('preferred_ingredients', '')}
             アレルギー: {allergy_text}
             好きな料理: {info.get('favorite_dishes', '')}
+            苦手な食材: {dislike_ingredients_text}
+            苦手な料理: {dislike_dishes_text}
             旬の野菜を利用: {'はい' if info.get('use_seasonal') else 'いいえ'}
             季節指定: {season_text}
             栄養バランスを考慮: {'はい' if info.get('nutrition_balance') else 'いいえ'}
@@ -365,6 +387,11 @@ if st.button("🍳 1か月分の夕食メニューを生成", type="primary"):
             5. 旬の野菜を利用する場合は、週に2回以上、指定季節の野菜を主菜または副菜に取り入れてください。
             6. 栄養バランスを考慮する場合は、1週間の中で肉・魚・大豆製品・緑黄色野菜・海藻・きのこがバランスよく登場するようにしてください。
             7. 予算内に収まるよう、高価な食材（牛肉・魚介類など）は週1〜2回程度に抑え、鶏肉・豚肉・大豆製品・旬の野菜でコスト調整してください。
+
+            【苦手な食材・苦手な料理への対応（重要）】
+            8. 「苦手な食材」に挙げられた食材は、原則としてメニューに使用しないでください。ただし、栄養上の観点から月に1回程度は調理法を大きく工夫して（細かく刻む、他の食材と合わせる、味付けを変える、揚げる等）少量だけ取り入れても構いません。その場合はレシピに「苦手克服の工夫」を明記してください。
+            9. 「苦手な料理」に挙げられた料理は、そのままの形では登場させないでください。似た系統の別料理（例：麻婆豆腐が苦手なら麻婆茄子や豆腐ステーキなど）で代替してください。
+            10. 苦手な食材・料理は、好みの食材・料理よりも優先して回避してください。
 
             出力はCSV形式で、以下の列を含めてください：
             日付,主菜名,主菜レシピ,副菜名,副菜レシピ,推定費用(円/人),栄養バランスコメント
@@ -381,7 +408,7 @@ if st.button("🍳 1か月分の夕食メニューを生成", type="primary"):
                 response = client.chat.completions.create(
                     model="deepseek-chat",
                     messages=[
-                        {"role": "system", "content": "あなたはプロの栄養士兼料理研究家です。家族の好みを尊重しつつ、好みに偏らないバリエーション豊かな献立を提案し、指示に従いCSV形式で出力してください。"},
+                        {"role": "system", "content": "あなたはプロの栄養士兼料理研究家です。家族の好みを尊重しつつ、好みに偏らないバリエーション豊かな献立を提案し、苦手な食材・料理は回避しつつ、指示に従いCSV形式で出力してください。"},
                         {"role": "user", "content": prompt}
                     ],
                     temperature=0.7,
